@@ -3,6 +3,7 @@
 
 sources.json에 정의된 소스에서 최신 공지를 파싱하고,
 state/seen.json과 비교해 신규 공지만 out/new_items.json으로 저장한다.
+소스별 수집 상태(실패·0건)는 out/health.json에 남긴다 (report_health.py가 이슈로 발행).
 LLM 호출 없음 — 전 과정 결정적(deterministic) 처리.
 """
 import hashlib
@@ -22,6 +23,7 @@ SOURCES_FILE = ROOT / "sources.json"
 SEEN_FILE = ROOT / "state" / "seen.json"
 OUT_DIR = ROOT / "out"
 NEW_ITEMS_FILE = OUT_DIR / "new_items.json"
+HEALTH_FILE = OUT_DIR / "health.json"
 
 HEADERS = {
     "User-Agent": (
@@ -133,32 +135,54 @@ def parse_kakao_devtalk(source):
 
 
 def parse_google_ads(source):
-    """단일 페이지 누적형 릴리즈 노트 — 'v24.1 (2026-05-13)' 형식 h2 단위로 아이템화."""
+    """단일 페이지 누적형 릴리즈 노트 — 'v25 (2026-07-22)' 형식 헤딩 단위로 아이템화.
+
+    - 2026-08 구조 변경: 릴리즈 헤딩이 h2 → h3로 내려가고, h2는 'v25 major version' 같은
+      버전 그룹 헤더로만 쓰인다. 재변경 대비해 h2/h3 둘 다 훑는다 (앵커 id 체계는 동일해
+      기존 seen id가 그대로 유효).
+    - 'Archived release notes' 이후 헤딩은 과거 버전 링크 모음이라 제외.
+    - Google은 같은 수정사항을 지원 버전 전체에 백포트해 본문이 사실상 동일한 항목이 반복된다
+      (v23.3 / v22.2). 본문에 자기 버전 문자열이 박혀 있어 그대로는 해시가 갈리므로,
+      버전 토큰을 vX로 치환한 뒤 해시해 중복을 제거하고 최신 버전 1건만 남긴다.
+    - 문서 순서는 버전 내림차순이라 날짜 순이 아니다 → 날짜 desc 정렬 후 상위 N건.
+    """
     soup = BeautifulSoup(fetch(source["url"]), "html.parser")
-    heading_re = re.compile(r"^v[\d.]+\s*\((\d{4}-\d{2}-\d{2})\)")
+    heading_re = re.compile(r"^v([\d.]+)\s*\((\d{4}-\d{2}-\d{2})\)")
     items = []
-    for h2 in soup.find_all("h2"):
-        text = clean_text(h2.get_text())
+    seen_content = set()
+    for h in soup.find_all(["h2", "h3"]):
+        if h.get("id") == "archived-release-notes":
+            break
+        text = clean_text(h.get_text())
         m = heading_re.match(text)
-        if not m or not h2.get("id"):
+        if not m or not h.get("id"):
             continue
-        url = f"{source['url']}#{h2['id']}"
-        # 다음 h2 전까지의 형제 노드 텍스트를 본문으로 수집
+        url = f"{source['url']}#{h['id']}"
+        # 다음 릴리즈 헤딩 전까지의 형제 노드 텍스트를 본문으로 수집 (h4 하위 섹션 포함)
         parts = []
-        for sib in h2.find_next_siblings():
-            if sib.name == "h2":
+        for sib in h.find_next_siblings():
+            if sib.name in ("h2", "h3"):
                 break
             parts.append(sib.get_text(" ", strip=True))
+        content = clean_text(" ".join(parts))[:CONTENT_MAX_CHARS]
+        if content:
+            normalized = re.sub(r"\bv\d+(?:\.\d+)*\b", "vX", content)
+            fingerprint = hashlib.sha1(normalized.encode("utf-8")).hexdigest()
+            if fingerprint in seen_content:
+                continue  # 백포트 중복 — 문서상 첫 번째(최신 버전)만 유지
+            seen_content.add(fingerprint)
         items.append({
             "id": item_id(url),
             "title": text,
             "url": url,
-            "date": m.group(1),
-            "content": clean_text(" ".join(parts))[:CONTENT_MAX_CHARS],
+            "date": m.group(2),
+            "content": content,
+            "_version": tuple(int(n) for n in m.group(1).split(".") if n),
         })
-        if len(items) >= MAX_ITEMS_PER_SOURCE:
-            break
-    return items
+    items.sort(key=lambda it: (it["date"], it["_version"]), reverse=True)
+    for it in items:
+        del it["_version"]
+    return items[:MAX_ITEMS_PER_SOURCE]
 
 
 def parse_meta_marketing(source):
@@ -263,6 +287,16 @@ def main():
     sources = json.loads(SOURCES_FILE.read_text(encoding="utf-8"))
     seen = load_seen()
     all_new = []
+    health = {"unhealthy": [], "healthy": []}
+
+    def mark_unhealthy(source, reason):
+        """수집 실패·0건 소스를 기록 — report_health.py가 GitHub 이슈로 올린다."""
+        health["unhealthy"].append({
+            "id": source["id"],
+            "name": source["name"],
+            "url": source["url"],
+            "reason": reason,
+        })
 
     for source in sources:
         sid = source["id"]
@@ -273,14 +307,23 @@ def main():
         parser = PARSERS.get(source["parser"])
         if parser is None:
             print(f"[warn] {sid}: 파서 {source['parser']} 미정의 — 스킵", file=sys.stderr)
+            mark_unhealthy(source, f"파서 {source['parser']} 미정의")
             continue
 
         try:
             items = parser(source)
         except Exception as exc:  # noqa: BLE001 — 네트워크/파싱 실패 소스는 경고 후 스킵
             print(f"[warn] {sid}: 수집 실패 — {exc}", file=sys.stderr)
+            mark_unhealthy(source, f"수집 실패 — {exc}")
             continue
 
+        if not items:
+            # 사이트 구조 변경 시 예외 없이 0건이 되므로 반드시 이상 신호로 남긴다
+            print(f"[warn] {sid}: 0건 파싱 — 사이트 구조 변경 의심", file=sys.stderr)
+            mark_unhealthy(source, "파싱 0건 (사이트 구조 변경 의심)")
+            continue
+
+        health["healthy"].append(sid)
         print(f"[ok] {sid}: {len(items)}건 파싱")
         for it in items:
             print(f"     - ({it['date'] or '날짜없음'}) {it['title'][:70]} | {it['url']}")
@@ -300,6 +343,7 @@ def main():
                     it["content"] = fetch_content(it)
                 all_new.append({
                     "id": it["id"],
+                    "source_id": sid,
                     "source_name": source["name"],
                     "title": it["title"],
                     "url": it["url"],
@@ -312,6 +356,13 @@ def main():
     SEEN_FILE.write_text(
         json.dumps(seen, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
+
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    HEALTH_FILE.write_text(
+        json.dumps(health, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    if health["unhealthy"]:
+        print(f"\n[warn] 이상 소스 {len(health['unhealthy'])}건 → {HEALTH_FILE.relative_to(ROOT)}", file=sys.stderr)
 
     if all_new:
         OUT_DIR.mkdir(parents=True, exist_ok=True)

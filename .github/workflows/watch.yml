@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  issues: write # 수집 이상 소스를 parser-health 이슈로 발행
   id-token: write # claude-code-action OIDC 토큰 교환용
 
 jobs:
@@ -45,8 +46,12 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }} # Claude GitHub App 설치 없이 기본 토큰 사용
-          prompt: "out/new_items.json을 .claude/skills/notice-summary 기준으로 요약해 out/summary.md로 저장해줘"
+          prompt: "out/new_items.json을 .claude/skills/notice-summary 기준으로 요약해 out/summary.md와 out/summaries.json으로 저장해줘"
           claude_args: "--allowedTools Read,Write"
+
+      - name: Archive notices
+        if: steps.check.outputs.has_new == 'true'
+        run: python scripts/archive.py # 슬랙 발송 전 — 웹훅이 실패해도 기록은 남긴다
 
       - name: Send Slack notification
         if: steps.check.outputs.has_new == 'true'
@@ -54,14 +59,21 @@ jobs:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: python scripts/notify.py
 
-      - name: Commit seen.json
+      - name: Commit seen.json & archive
         run: |
-          if ! git diff --quiet state/seen.json; then
+          git add state/seen.json
+          if [ -d archive ]; then git add archive; fi
+          if ! git diff --cached --quiet; then
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add state/seen.json
-            git commit -m "chore: seen update $(date -u +%Y-%m-%d)"
+            git commit -m "chore: seen/archive update $(date -u +%Y-%m-%d)"
             git push
           else
-            echo "seen.json 변경 없음"
+            echo "변경 없음"
           fi
+
+      - name: Report parser health
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/report_health.py

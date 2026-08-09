@@ -20,12 +20,18 @@ GitHub Actions (매일 09/12/15/18시 KST / 수동 실행)
 │                          ▼
 ├─ 3. anthropics/claude-code-action       ← Claude는 요약에만 사용
 │     .claude/skills/notice-summary 규칙으로
-│     중요도(🔴🟡🟢) 분류 + 요약 → out/summary.md
+│     중요도(🔴🟡🟢) 분류 + 요약 → out/summary.md, out/summaries.json
 │
-├─ 4. scripts/notify.py                   ← 결정적 처리
+├─ 4. scripts/archive.py                  ← 결정적 처리
+│     요약 + 원문 발췌를 archive/<매체>/<연>/<월>/<날짜>-<제목>.md로 기록
+│
+├─ 5. scripts/notify.py                   ← 결정적 처리
 │     summary.md → 슬랙 Incoming Webhook (40,000자 초과 시 분할)
 │
-└─ 5. state/seen.json 변경 시 git commit & push
+├─ 6. state/seen.json·archive/ 변경 시 git commit & push
+│
+└─ 7. scripts/report_health.py            ← 항상 실행
+      수집 실패·0건 소스를 [parser-health] 이슈로 발행 (복구되면 자동 close)
 ```
 
 ## 모니터링 대상
@@ -35,7 +41,7 @@ GitHub Actions (매일 09/12/15/18시 KST / 수동 실행)
 | 네이버 검색광고 API | GitHub Issues API | ✅ |
 | 네이버 GFA API | Docusaurus 블로그 HTML | ✅ |
 | 카카오 데브톡 공지 | Discourse JSON (`/c/notice.json`) | ✅ |
-| Google Ads API | 릴리즈 노트 페이지의 버전 헤딩(h2) 단위 | ✅ |
+| Google Ads API | 릴리즈 노트 페이지의 버전 헤딩(h3) 단위, 백포트 중복 제거 | ✅ |
 | Meta Graph API | changelog의 버전 링크 단위 | ✅ |
 | Criteo Marketing API | — | ❌ URL 404 (`enabled: false`) |
 | TikTok Business API | — | ❌ JS 렌더링 (`enabled: false`) |
@@ -99,9 +105,12 @@ push 후 Actions 탭에서 `ad-api-notice-watch` → Run workflow (수동 실행
 ├── .github/workflows/watch.yml          # 크론 워크플로
 ├── .claude/skills/notice-summary/SKILL.md  # 요약 규칙 (중요도 분류)
 ├── scripts/
-│   ├── crawl.py                         # 수집 → 신규 판별 → new_items.json
-│   └── notify.py                        # 슬랙 발송
+│   ├── crawl.py                         # 수집 → 신규 판별 → new_items.json, health.json
+│   ├── archive.py                       # 공지 아카이브 md + 인덱스 생성
+│   ├── notify.py                        # 슬랙 발송
+│   └── report_health.py                 # 수집 이상 소스 → GitHub 이슈
 ├── sources.json                         # 모니터링 대상 정의
 ├── state/seen.json                      # 알림 완료 id (git 커밋 대상)
-└── out/                                 # new_items.json, summary.md (커밋 안 함)
+├── archive/                             # 매체별/연/월 공지 기록 (git 커밋 대상)
+└── out/                                 # new_items.json, summary.md 등 (커밋 안 함)
 ```
