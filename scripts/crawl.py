@@ -118,11 +118,20 @@ def parse_naver_gfa(source):
 
 
 def parse_kakao_devtalk(source):
-    """Discourse JSON 엔드포인트 — /c/notice.json의 topic 목록."""
+    """Discourse JSON 엔드포인트 — /c/notice.json의 topic 목록.
+
+    Discourse는 pinned 토픽을 목록 맨 앞에 올린다. 그대로 앞 10건을 자르면 오래된 고정 공지가
+    자리를 차지해 최신 공지가 밀려날 수 있으므로 created_at 내림차순으로 다시 정렬한다.
+    """
     data = fetch(source["url"].rstrip("/") + ".json", as_json=True)
     base = "https://devtalk.kakao.com"
+    topics = sorted(
+        data["topic_list"]["topics"],
+        key=lambda t: t.get("created_at") or "",
+        reverse=True,
+    )
     items = []
-    for topic in data["topic_list"]["topics"][:MAX_ITEMS_PER_SOURCE]:
+    for topic in topics[:MAX_ITEMS_PER_SOURCE]:
         url = f"{base}/t/{topic['slug']}/{topic['id']}"
         items.append({
             "id": item_id(url),
@@ -214,21 +223,34 @@ def parse_meta_marketing(source):
 
 
 def parse_criteo(source):
-    """readme.io 릴리즈 노트 — 릴리즈 헤딩(h2/h3) 단위. 현재 URL 404로 enabled: false."""
+    """Marketing Solutions API Changelog — 변경 항목 h2 단위.
+
+    2026-08 URL 이관: .../docs/release-notes(404) → .../changelog/changelog.
+    상위 .../changelog 페이지는 버전 단위 요약이고 h2 id가 렌더링마다 바뀌는 난수라 쓸 수 없다
+    (id가 바뀌면 sha1(url)도 바뀌어 같은 공지가 매번 신규로 잡힌다).
+    이 페이지는 'product-boost' 같은 안정적인 슬러그 id를 쓰므로 아이템 단위 추적이 가능하다.
+    페이지에 날짜 표기가 없어 date는 빈 값 — 새 버전이 나오면 항목이 통째로 교체된다.
+    """
     soup = BeautifulSoup(fetch(source["url"]), "html.parser")
+    main = soup.find("main") or soup.body
     items = []
-    for h in soup.select("article h2, article h3, main h2, main h3"):
-        text = clean_text(h.get_text())
-        if not text or not h.get("id") or "not found" in text.lower():
+    for h in main.find_all(["h2", "h3"]):
+        text = clean_text(h.get_text()).lstrip("​").strip()
+        hid = h.get("id")
+        if not text or not hid or hid == "page-title" or "not found" in text.lower():
             continue
-        url = f"{source['url']}#{h['id']}"
-        date_m = re.search(r"\d{4}[-./]\d{1,2}[-./]\d{1,2}", text)
+        url = f"{source['url']}#{hid}"
+        parts = []
+        for sib in h.find_next_siblings():
+            if sib.name in ("h1", "h2", "h3"):
+                break
+            parts.append(sib.get_text(" ", strip=True))
         items.append({
             "id": item_id(url),
             "title": text,
             "url": url,
-            "date": date_m.group(0) if date_m else "",
-            "content": "",
+            "date": "",
+            "content": clean_text(" ".join(parts))[:CONTENT_MAX_CHARS],
         })
         if len(items) >= MAX_ITEMS_PER_SOURCE:
             break
@@ -252,10 +274,31 @@ PARSERS = {
 
 
 # ---------------------------------------------------------------------------
-# 본문 보강 — content가 비어 있는 신규 아이템은 상세 페이지 fetch 시도
+# 본문 보강 — content/date가 비어 있는 신규 아이템은 상세 페이지 fetch 시도
 # ---------------------------------------------------------------------------
 
-def fetch_content(item):
+MONTHS = {
+    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
+    "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
+}
+RELEASED_RE = re.compile(
+    r"Released\s+(" + "|".join(MONTHS) + r")\s+(\d{1,2}),?\s+(\d{4})", re.IGNORECASE
+)
+
+
+def extract_release_date(text: str) -> str:
+    """상세 페이지의 'Released July 29, 2026' 표기를 ISO 날짜로.
+
+    Meta Graph API changelog는 목록에 날짜가 없고 버전 페이지에만 릴리즈 날짜가 있다.
+    """
+    m = RELEASED_RE.search(text)
+    if not m:
+        return ""
+    return f"{int(m.group(3)):04d}-{MONTHS[m.group(1).lower()]:02d}-{int(m.group(2)):02d}"
+
+
+def enrich_item(item):
+    """상세 페이지를 받아 비어 있는 content·date를 채운다 (신규 아이템에만 호출)."""
     try:
         soup = BeautifulSoup(fetch(item["url"]), "html.parser")
         main = (
@@ -264,11 +307,15 @@ def fetch_content(item):
             or soup.find("main")
             or soup.body
         )
-        if main:
-            return clean_text(main.get_text(" ", strip=True))[:CONTENT_MAX_CHARS]
+        if not main:
+            return
+        text = clean_text(main.get_text(" ", strip=True))
+        if not item.get("content"):
+            item["content"] = text[:CONTENT_MAX_CHARS]
+        if not item.get("date"):
+            item["date"] = extract_release_date(text)
     except Exception as exc:  # noqa: BLE001
         print(f"  [warn] 본문 수집 실패 ({item['url']}): {exc}", file=sys.stderr)
-    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -339,8 +386,8 @@ def main():
         if new_items:
             print(f"     → 신규 {len(new_items)}건")
             for it in new_items:
-                if not it["content"]:
-                    it["content"] = fetch_content(it)
+                if not it["content"] or not it["date"]:
+                    enrich_item(it)
                 all_new.append({
                     "id": it["id"],
                     "source_id": sid,

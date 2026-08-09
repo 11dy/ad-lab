@@ -25,7 +25,7 @@
 | `scripts/report_health.py` | 수집 실패·0건 소스를 `[parser-health]` GitHub 이슈로 발행, 복구되면 자동 close |
 | `.claude/skills/notice-summary/SKILL.md` | 요약 규칙. **메시지 포맷/중요도 기준 변경은 이 파일만** 수정. `out/summary.md`(슬랙) + `out/summaries.json`(아카이브용) 두 개를 출력 |
 | `archive/` | 공지 아카이브 (git 커밋 대상, Actions가 자동 생성). 수동 편집 대상 아님 |
-| `sources.json` | 소스 정의. criteo(URL 404)·tiktok(JS 렌더링)은 `enabled: false` |
+| `sources.json` | 소스 정의. tiktok(완전 CSR)만 `enabled: false` |
 | `state/seen.json` | 알림 완료 id (git 커밋 대상, Actions가 자동 갱신) |
 | `wiki/` | **로컬 전용 문서 (gitignored, push 금지)** — 상세 설계·트러블슈팅·운영 가이드 |
 

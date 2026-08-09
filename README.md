@@ -38,13 +38,13 @@ GitHub Actions (매일 09/12/15/18시 KST / 수동 실행)
 
 | 소스 | 방식 | 상태 |
 |---|---|---|
-| 네이버 검색광고 API | GitHub Issues API | ✅ |
-| 네이버 GFA API | Docusaurus 블로그 HTML | ✅ |
-| 카카오 데브톡 공지 | Discourse JSON (`/c/notice.json`) | ✅ |
+| 네이버 검색광고 API | 공식 공지 RSS (`feed.xml`) | ✅ |
+| 네이버 GFA API | Docusaurus 블로그 HTML | ✅ (저빈도 — 전체 5건) |
+| 카카오 데브톡 공지 | Discourse JSON (`/c/notice.json`), `created_at` 내림차순 | ✅ (광고 외 공지 혼재) |
 | Google Ads API | 릴리즈 노트 페이지의 버전 헤딩(h3) 단위, 백포트 중복 제거 | ✅ |
-| Meta Graph API | changelog의 버전 링크 단위 | ✅ |
-| Criteo Marketing API | — | ❌ URL 404 (`enabled: false`) |
-| TikTok Business API | — | ❌ JS 렌더링 (`enabled: false`) |
+| Meta Graph API | changelog의 버전 링크 단위, 날짜는 버전 페이지에서 보강 | ✅ (버전 단위만) |
+| Criteo Marketing API | Changelog 페이지의 변경 항목(h2 슬러그) 단위 | ✅ |
+| TikTok Business API | — | ❌ 완전 CSR (`enabled: false`) |
 
 ## 설정
 

@@ -42,11 +42,11 @@
   {
     "id": "criteo",
     "name": "Criteo Marketing API",
-    "url": "https://developers.criteo.com/marketing-solutions/docs/release-notes",
+    "url": "https://developers.criteo.com/marketing-solutions/changelog/changelog",
     "type": "html",
     "parser": "parse_criteo",
-    "enabled": false,
-    "note": "2026-06 기준 해당 URL 404 (Page Not Found). 새 release notes URL 확인 후 enabled: true로 변경"
+    "enabled": true,
+    "note": "2026-08 URL 이관: docs/release-notes(404) → changelog/changelog. 상위 /marketing-solutions/changelog 페이지는 h2 id가 렌더링마다 바뀌는 난수라 사용 불가"
   },
   {
     "id": "tiktok",
@@ -55,6 +55,6 @@
     "type": "html",
     "parser": "parse_tiktok",
     "enabled": false,
-    "note": "JS 렌더링(Next.js) 페이지라 requests로 파싱 불가"
+    "note": "JS 렌더링(Next.js) 페이지라 requests로 파싱 불가. 2026-08 재확인 — __NEXT_DATA__ props가 비어 있는 완전 CSR이라 헤드리스 브라우저 없이는 불가"
   }
 ]
